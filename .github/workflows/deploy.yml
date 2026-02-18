@@ -1,0 +1,44 @@
+name: GitOps-CI-CD
+
+on:
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: write  # Crucial for allowing the action to update your k8s/deployment.yaml
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Azure Container Registry Login
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ secrets.ACR_NAME }}.azurecr.io
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and Push Image
+        run: |
+          # We use the GitHub Commit SHA as the unique version tag
+          IMAGE_TAG=${{ github.sha }}
+          REGISTRY_IMAGE=${{ secrets.ACR_NAME }}.azurecr.io/myapp:$IMAGE_TAG
+          
+          docker build -t $REGISTRY_IMAGE .
+          docker push $REGISTRY_IMAGE
+          echo "IMAGE_FULL_PATH=$REGISTRY_IMAGE" >> $GITHUB_ENV
+
+      - name: Update Manifest for Argo CD
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          
+          # This command finds the placeholder in your YAML and swaps it for the real ACR image
+          sed -i "s|image: CHANGE_ME_IMAGE_TAG|image: ${{ env.IMAGE_FULL_PATH }}|g" k8s/deployment.yaml
+          
+          git add k8s/deployment.yaml
+          git commit -m "Update image to version ${{ github.sha }} [skip ci]"
+          git push
